@@ -1,0 +1,10 @@
+[package]
+name = "chasm-api"
+version = "0.1.0"
+authors = ["Martin Hartl <martin@hartl.co>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-web = "3"
