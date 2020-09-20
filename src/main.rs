@@ -45,10 +45,11 @@ struct PostContent {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(tag = "type", content = "value")]
 enum ContentPart {
-    Header { text: String },
-    Paragraph { text: String },
-    Image { link: String },
+    Header(String),
+    Paragraph(String),
+    Image(String),
 }
 
 async fn commit(repo: String, access_token: String, content: CommitContent) {
@@ -90,15 +91,15 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
 
     for content_part in &content.content {
         match content_part {
-            ContentPart::Header { text } => {
+            ContentPart::Header(text) => {
                 let header_string = format!("## {}\n", text);
                 body_string.push_str(&header_string);
             }
-            ContentPart::Paragraph { text } => {
+            ContentPart::Paragraph(text) => {
                 let paragraph_string = format!("{}\n", text);
                 body_string.push_str(&paragraph_string);
             }
-            ContentPart::Image { link } => {
+            ContentPart::Image(link) => {
                 let image_string = format!("![]({})\n", link);
                 body_string.push_str(&image_string);
             }
