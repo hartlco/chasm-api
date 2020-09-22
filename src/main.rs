@@ -1,5 +1,11 @@
+use actix_multipart::Multipart;
 use actix_web::client::Client;
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get , web, App, Error, HttpResponse, HttpServer, Responder};
+
+use std::io::Write;
+use std::str;
+
+use futures::{StreamExt, TryStreamExt};
 
 use json::JsonValue;
 
@@ -52,7 +58,17 @@ enum ContentPart {
     Image(String),
 }
 
-async fn commit(repo: String, access_token: String, content: CommitContent) {
+#[derive(Deserialize, Serialize)]
+struct CommitResponse {
+    content: CommitResponseContent,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CommitResponseContent {
+    download_url: String,
+}
+
+async fn commit(repo: String, access_token: String, content: CommitContent) -> CommitResponse {
     let repository = repo;
 
     let post_url = format!(
@@ -63,15 +79,20 @@ async fn commit(repo: String, access_token: String, content: CommitContent) {
 
     let client = Client::default();
 
-    let response = client
+    let response: CommitResponse = client
         .put(post_url)
         .header("User-Agent", "actix-web/3.0")
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json;charset=UTF-8")
         .send_body(serde_json::to_string(&content).unwrap())
-        .await;
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
 
-    println!("Response: {:?}", response);
+    println!("Response: {:?}", response.content.download_url);
+    response
 }
 
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
@@ -107,7 +128,10 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
         // body_string.push_str(&image_string);
     }
 
-    let content_string = format!("+++\ntitle = \"{}\"\ndate = {}\n+++\n{}\n\n<!-- more -->", title_string, date, body_string);
+    let content_string = format!(
+        "+++\ntitle = \"{}\"\ndate = {}\n+++\n{}\n\n<!-- more -->",
+        title_string, date, body_string
+    );
 
     let c2 = CommitContent::new(
         "Add post".to_string(),
@@ -119,18 +143,84 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
         content.repo.to_string(),
         content.access_token.to_string(),
         c2,
-    ).await;
+    )
+    .await;
     HttpResponse::Ok().json(content.0)
+}
+
+async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse>> {
+    let mut content: Option<CommitContent> = Option::None;
+    let mut repo: Option<String> = Option::None;
+    let mut access_token: Option<String> = Option::None;
+
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let content_type = field.content_disposition().unwrap();
+
+        if content_type.get_name() == Some("access_token") {
+            let mut vec = Vec::new();
+
+            while let Some(chunk) = field.next().await {
+                let data = chunk.unwrap();
+                let vec_b = data.to_vec();
+                vec.extend(vec_b);
+            }
+
+            access_token = Some(str::from_utf8(&vec).unwrap().to_string());
+            continue;
+        }
+
+        if content_type.get_name() == Some("repo") {
+            let mut vec = Vec::new();
+
+            while let Some(chunk) = field.next().await {
+                let data = chunk.unwrap();
+                let vec_b = data.to_vec();
+                vec.extend(vec_b);
+            }
+
+            repo = Some(str::from_utf8(&vec).unwrap().to_string());
+
+            continue;
+        }
+
+        if content_type.get_name() == Some("file") {
+            let filename = content_type.get_filename().unwrap();
+            let filepath = format!("static/{}", sanitize_filename::sanitize(&filename));
+
+            let mut vec = Vec::new();
+
+            while let Some(chunk) = field.next().await {
+                let data = chunk.unwrap();
+                let vec_b = data.to_vec();
+                vec.extend(vec_b);
+            }
+
+            content = Some(CommitContent::new_from_image(
+                "Add image".to_string(),
+                vec,
+                filepath.to_string(),
+            ));
+
+            continue;
+
+            // println!("{}", content.message);
+        }
+    }
+
+    // TODO: Fix unwrapping
+
+    let unwrapped_repo = repo.unwrap();
+    let unwrapped_access_token = access_token.unwrap();
+    let unwrapped_content = content.unwrap();
+
+    let response = commit(unwrapped_repo, unwrapped_access_token, unwrapped_content).await;
+
+    Ok(web::Json(response))
 }
 
 #[get("/")]
 async fn hello() -> impl Responder {
     HttpResponse::Ok().body("Hello world!")
-}
-
-#[post("/echo")]
-async fn echo(req_body: String) -> impl Responder {
-    HttpResponse::Ok().body(req_body)
 }
 
 async fn manual_hello() -> impl Responder {
@@ -142,8 +232,8 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .service(hello)
-            .service(echo)
             .service(web::resource("/post_content").route(web::post().to(post_content)))
+            .service(web::resource("/upload_image").route(web::post().to(upload_image)))
             .route("/hey", web::get().to(manual_hello))
     })
     .bind("127.0.0.1:8080")?
