@@ -240,13 +240,16 @@ async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let url = "127.0.0.1:3000";
+    println!("Running on: http://{}", url);
+
     HttpServer::new(|| {
         App::new()
             .service(hello)
             .service(web::resource("/post_content").route(web::post().to(post_content)))
             .service(web::resource("/upload_image").route(web::post().to(upload_image)))
     })
-    .bind("127.0.0.1:8080")?
+    .bind(url)?
     .run()
     .await
 }
