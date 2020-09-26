@@ -1,9 +1,8 @@
 use actix_multipart::Multipart;
 use actix_web::client::Client;
-use actix_web::{get, web, App, Result, HttpResponse, HttpServer, Responder, ResponseError};
+use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, ResponseError, Result};
 
 use std::fmt;
-use std::io::Write;
 use std::str;
 
 use futures::{StreamExt, TryStreamExt};
@@ -12,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
 
-use serde_json::{Value};
+use serde_json::Value;
 
 use base64::encode;
 
@@ -170,12 +169,8 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     .await;
 
     match commit_content {
-        Ok(_) => {
-            HttpResponse::Ok().json(content.0)
-        }
-        Err(error) => {
-            HttpResponse::from_error(actix_web::error::ErrorBadRequest(error))
-        }
+        Ok(_) => HttpResponse::Ok().json(content.0),
+        Err(error) => HttpResponse::from_error(actix_web::error::ErrorBadRequest(error)),
     }
 }
 
@@ -184,34 +179,19 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
     let mut repo: Option<String> = Option::None;
     let mut access_token: Option<String> = Option::None;
 
-    while let Ok(Some(mut field)) = payload.try_next().await {
+    while let Ok(Some(field)) = payload.try_next().await {
         let content_disposition = field.content_disposition();
         let field_name = content_disposition.unwrap();
 
         if field_name.get_name() == Some("access_token") {
-            let mut vec = Vec::new();
-
-            while let Some(chunk) = field.next().await {
-                let data = chunk.unwrap();
-                let vec_b = data.to_vec();
-                vec.extend(vec_b);
-            }
-
+            let vec= vec_from(field).await;
             access_token = Some(str::from_utf8(&vec).unwrap().to_string());
             continue;
         }
 
         if field_name.get_name() == Some("repo") {
-            let mut vec = Vec::new();
-
-            while let Some(chunk) = field.next().await {
-                let data = chunk.unwrap();
-                let vec_b = data.to_vec();
-                vec.extend(vec_b);
-            }
-
+            let vec= vec_from(field).await;
             repo = Some(str::from_utf8(&vec).unwrap().to_string());
-
             continue;
         }
 
@@ -219,13 +199,7 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
             let filename = field_name.get_filename().unwrap();
             let filepath = format!("static/{}", sanitize_filename::sanitize(&filename));
 
-            let mut vec = Vec::new();
-
-            while let Some(chunk) = field.next().await {
-                let data = chunk.unwrap();
-                let vec_b = data.to_vec();
-                vec.extend(vec_b);
-            }
+            let vec= vec_from(field).await;
 
             content = Some(CommitContent::new_from_image(
                 "Add image".to_string(),
@@ -255,8 +229,17 @@ async fn hello() -> impl Responder {
     HttpResponse::Ok().body("Hello world!")
 }
 
-async fn manual_hello() -> impl Responder {
-    HttpResponse::Ok().body("Hey there!")
+async fn vec_from(field: actix_multipart::Field) -> Vec<u8> {
+    let mut vec = Vec::new();
+    let mut field = field;
+
+    while let Some(chunk) = field.next().await {
+        let data = chunk.unwrap();
+        let vec_b = data.to_vec();
+        vec.extend(vec_b);
+    }
+
+    return vec
 }
 
 #[actix_web::main]
@@ -266,7 +249,6 @@ async fn main() -> std::io::Result<()> {
             .service(hello)
             .service(web::resource("/post_content").route(web::post().to(post_content)))
             .service(web::resource("/upload_image").route(web::post().to(upload_image)))
-            .route("/hey", web::get().to(manual_hello))
     })
     .bind("127.0.0.1:8080")?
     .run()
