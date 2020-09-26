@@ -1,21 +1,34 @@
 use actix_multipart::Multipart;
 use actix_web::client::Client;
-use actix_web::{get , web, App, Error, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, Result, HttpResponse, HttpServer, Responder, ResponseError};
 
+use std::fmt;
 use std::io::Write;
 use std::str;
 
 use futures::{StreamExt, TryStreamExt};
 
-use json::JsonValue;
-
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
 
-use serde_json::{Result, Value};
+use serde_json::{Value};
 
 use base64::encode;
+
+#[derive(Debug, Clone)]
+enum ChasmError {
+    InvalidCommitRequest,
+    InvalidCommitJSON,
+    InvalidImageUploadRequest,
+    NoAccessToken,
+}
+
+impl fmt::Display for ChasmError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid first item to double")
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 struct CommitContent {
@@ -68,7 +81,11 @@ struct CommitResponseContent {
     download_url: String,
 }
 
-async fn commit(repo: String, access_token: String, content: CommitContent) -> CommitResponse {
+async fn commit(
+    repo: String,
+    access_token: String,
+    content: CommitContent,
+) -> std::result::Result<CommitResponse, ChasmError> {
     let repository = repo;
 
     let post_url = format!(
@@ -79,25 +96,32 @@ async fn commit(repo: String, access_token: String, content: CommitContent) -> C
 
     let client = Client::default();
 
-    let response: CommitResponse = client
+    let response = client
         .put(post_url)
         .header("User-Agent", "actix-web/3.0")
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json;charset=UTF-8")
-        .send_body(serde_json::to_string(&content).unwrap())
-        .await
-        .unwrap()
+        .send_body(serde_json::to_string(&content).unwrap_or("Empty".to_string()))
+        .await;
+
+    let mut successful_response;
+
+    match response {
+        Ok(response) => {
+            successful_response = response;
+        }
+        Err(_) => {
+            return Err(ChasmError::InvalidCommitRequest);
+        }
+    }
+
+    successful_response
         .json()
         .await
-        .unwrap();
-
-    println!("Response: {:?}", response.content.download_url);
-    response
+        .map_err(|_| ChasmError::InvalidCommitJSON)
 }
 
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
-    println!("model: {:?}", &content.access_token);
-
     let now: DateTime<Utc> = Utc::now();
     let filename_date = now.format("%Y-%m-%dT%H:%M:%SZ");
     let date = now.format("%Y-%m-%dT%H:%M:%SZ");
@@ -125,7 +149,6 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
                 body_string.push_str(&image_string);
             }
         }
-        // body_string.push_str(&image_string);
     }
 
     let content_string = format!(
@@ -139,13 +162,21 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
         format!("content/{}.md", filename_date),
     );
 
-    commit(
+    let commit_content = commit(
         content.repo.to_string(),
         content.access_token.to_string(),
         c2,
     )
     .await;
-    HttpResponse::Ok().json(content.0)
+
+    match commit_content {
+        Ok(_) => {
+            HttpResponse::Ok().json(content.0)
+        }
+        Err(error) => {
+            HttpResponse::from_error(actix_web::error::ErrorBadRequest(error))
+        }
+    }
 }
 
 async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse>> {
@@ -154,9 +185,10 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
     let mut access_token: Option<String> = Option::None;
 
     while let Ok(Some(mut field)) = payload.try_next().await {
-        let content_type = field.content_disposition().unwrap();
+        let content_disposition = field.content_disposition();
+        let field_name = content_disposition.unwrap();
 
-        if content_type.get_name() == Some("access_token") {
+        if field_name.get_name() == Some("access_token") {
             let mut vec = Vec::new();
 
             while let Some(chunk) = field.next().await {
@@ -169,7 +201,7 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
             continue;
         }
 
-        if content_type.get_name() == Some("repo") {
+        if field_name.get_name() == Some("repo") {
             let mut vec = Vec::new();
 
             while let Some(chunk) = field.next().await {
@@ -183,8 +215,8 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
             continue;
         }
 
-        if content_type.get_name() == Some("file") {
-            let filename = content_type.get_filename().unwrap();
+        if field_name.get_name() == Some("file") {
+            let filename = field_name.get_filename().unwrap();
             let filepath = format!("static/{}", sanitize_filename::sanitize(&filename));
 
             let mut vec = Vec::new();
@@ -215,7 +247,7 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
 
     let response = commit(unwrapped_repo, unwrapped_access_token, unwrapped_content).await;
 
-    Ok(web::Json(response))
+    Ok(web::Json(response.unwrap()))
 }
 
 #[get("/")]
