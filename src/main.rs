@@ -1,3 +1,5 @@
+use std::env;
+
 use actix_multipart::Multipart;
 use actix_web::client::Client;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, ResponseError, Result};
@@ -256,7 +258,9 @@ async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let url = "0.0.0.0:8080";
+    let port = env::var("PORT").unwrap_or("3000".to_string());
+
+    let url = format!("0.0.0.0:{}", port);
     println!("Running on: http://{}", url);
 
     HttpServer::new(|| {
