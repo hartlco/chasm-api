@@ -1,1 +1,1 @@
-web: ./target/release/chasm-api
+web: ./target/debug/chasm-api
