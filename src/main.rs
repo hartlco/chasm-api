@@ -17,8 +17,6 @@ use base64::encode;
 enum ChasmError {
     InvalidCommitRequest,
     InvalidCommitJSON,
-    InvalidImageUploadRequest,
-    NoAccessToken,
 }
 
 impl fmt::Display for ChasmError {
@@ -56,6 +54,7 @@ impl CommitContent {
 struct PostContent {
     repo: String,
     access_token: String,
+    postfolder: String,
     title: Option<String>,
     content: Vec<ContentPart>,
 }
@@ -76,6 +75,12 @@ struct CommitResponse {
 #[derive(Deserialize, Serialize)]
 struct CommitResponseContent {
     download_url: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ImageUploadResponse {
+    commit_response: CommitResponse,
+    filename: String
 }
 
 async fn commit(
@@ -120,7 +125,6 @@ async fn commit(
 
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     let now: DateTime<Utc> = Utc::now();
-    let filename_date = now.format("%Y-%m-%dT%H:%M:%SZ");
     let date = now.format("%Y-%m-%dT%H:%M:%SZ");
 
     let mut body_string = "".to_string();
@@ -141,8 +145,8 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
                 let paragraph_string = format!("{}\n", text);
                 body_string.push_str(&paragraph_string);
             }
-            ContentPart::Image(link) => {
-                let image_string = format!("![]({})\n", link);
+            ContentPart::Image(filename) => {
+                let image_string = format!("![]({})\n", filename);
                 body_string.push_str(&image_string);
             }
         }
@@ -156,7 +160,7 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     let c2 = CommitContent::new(
         "Add post".to_string(),
         content_string,
-        format!("content/{}.md", filename_date),
+        format!("content/{}/index.md", &content.postfolder),
     );
 
     let commit_content = commit(
@@ -172,10 +176,12 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     }
 }
 
-async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse>> {
-    let mut content: Option<CommitContent> = Option::None;
+async fn upload_image(mut payload: Multipart) -> Result<web::Json<ImageUploadResponse>> {
     let mut repo: Option<String> = Option::None;
     let mut access_token: Option<String> = Option::None;
+    let mut relative_filename: Option<String> = Option::None;
+    let mut postfolder: Option<String> = Option::None;
+    let mut image_vec: Option<Vec<u8>> = Option::None;
 
     while let Ok(Some(field)) = payload.try_next().await {
         let content_disposition = field.content_disposition();
@@ -190,16 +196,16 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
                 repo = Some(str::from_utf8(&vec).unwrap().to_string());
                 continue;
             }
+
+            if field_name.get_name() == Some("postfolder") {
+                postfolder = Some(str::from_utf8(&vec).unwrap().to_string());
+                continue;
+            }
     
             if field_name.get_name() == Some("file") {
                 let filename = field_name.get_filename().unwrap();
-                let filepath = format!("static/{}", sanitize_filename::sanitize(&filename));
-    
-                content = Some(CommitContent::new_from_image(
-                    "Add image".to_string(),
-                    vec,
-                    filepath.to_string(),
-                ));
+                relative_filename = Some(filename.to_string());
+                image_vec = Some(vec);
     
                 continue;
             }   
@@ -208,18 +214,28 @@ async fn upload_image(mut payload: Multipart) -> Result<web::Json<CommitResponse
 
     // TODO: Fix unwrapping
 
+    let filename = relative_filename.unwrap();
+    let n1 = filename.to_string();
+    let filepath = format!("content/{}/{}", postfolder.unwrap(), sanitize_filename::sanitize(&n1));
+
+    let content = CommitContent::new_from_image(
+        "Add image".to_string(),
+        image_vec.unwrap(),
+        filepath.to_string(),
+    );
+
     let unwrapped_repo = repo.unwrap();
     let unwrapped_access_token = access_token.unwrap();
-    let unwrapped_content = content.unwrap();
+    let unwrapped_content = content;
 
     let response = commit(unwrapped_repo, unwrapped_access_token, unwrapped_content).await;
 
-    Ok(web::Json(response.unwrap()))
-}
+    let image_upload_response = ImageUploadResponse {
+        commit_response: response.unwrap(),
+        filename: filename,
+    };
 
-#[get("/")]
-async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
+    Ok(web::Json(image_upload_response))
 }
 
 async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
@@ -245,7 +261,6 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
-            .service(hello)
             .service(web::resource("/post_content").route(web::post().to(post_content)))
             .service(web::resource("/upload_image").route(web::post().to(upload_image)))
     })

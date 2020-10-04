@@ -1,5 +1,5 @@
 [package]
-name = "chasm-api"
+name = "myweblog-api"
 version = "0.1.0"
 authors = ["Martin Hartl <martin@hartl.co>"]
 edition = "2018"
