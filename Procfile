@@ -1,1 +1,1 @@
-web: ./target/debug/chasm-api
+web: ./target/release/myweblog-api
