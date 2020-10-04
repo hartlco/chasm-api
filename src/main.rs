@@ -256,7 +256,7 @@ async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let url = "127.0.0.1:3000";
+    let url = "0.0.0.0:8080";
     println!("Running on: http://{}", url);
 
     HttpServer::new(|| {
