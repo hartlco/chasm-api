@@ -2,7 +2,7 @@ use std::env;
 
 use actix_multipart::Multipart;
 use actix_web::client::Client;
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, ResponseError, Result};
+use actix_web::{web, App, HttpResponse, HttpServer, Result};
 
 use std::fmt;
 use std::str;
