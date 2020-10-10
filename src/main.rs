@@ -232,20 +232,20 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
         title_string, date, body_string
     );
 
-    let c2 = CommitContent::new(
+    let commit_content = CommitContent::new(
         "Add post".to_string(),
         content_string,
         format!("content/{}/index.md", &content.postfolder),
     );
 
-    let commit_content = commit(
+    let commit_response = commit(
         content.repo.to_string(),
         content.access_token.to_string(),
-        c2,
+        commit_content,
     )
     .await;
 
-    match commit_content {
+    match commit_response {
         Ok(_) => HttpResponse::Ok().json(content.0),
         Err(error) => HttpResponse::from_error(actix_web::error::ErrorBadRequest(error)),
     }
