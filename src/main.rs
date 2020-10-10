@@ -19,11 +19,24 @@ use base64::encode;
 enum ChasmError {
     InvalidCommitRequest,
     InvalidCommitJSON,
+    FilenameMissing,
+    PostfolderMissing,
+    ImageDataMissing,
+    RepoMissing,
+    AccessTokenMissing,
 }
 
 impl fmt::Display for ChasmError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid first item to double")
+        match self {
+            ChasmError::InvalidCommitRequest => write!(f, "Invalid Commit Request"),
+            ChasmError::InvalidCommitJSON => write!(f, "Invalid Commit JSON"),
+            ChasmError::FilenameMissing => write!(f, "Filename missing"),
+            ChasmError::PostfolderMissing => write!(f, "Postfolder missing"),
+            ChasmError::ImageDataMissing => write!(f, "Image Data Missing"),
+            ChasmError::RepoMissing => write!(f, "Repo Missng"),
+            ChasmError::AccessTokenMissing => write!(f, "Access Token Missing"),
+        }
     }
 }
 
@@ -125,6 +138,66 @@ async fn commit(
         .map_err(|_| ChasmError::InvalidCommitJSON)
 }
 
+async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUploadResponse, ChasmError> {
+    let mut repo: Option<String> = Option::None;
+    let mut access_token: Option<String> = Option::None;
+    let mut relative_filename: Option<String> = Option::None;
+    let mut postfolder: Option<String> = Option::None;
+    let mut image_vec: Option<Vec<u8>> = Option::None;
+
+    while let Ok(Some(field)) = payload.try_next().await {
+        let content_disposition = field.content_disposition();
+
+        if let (Some(vec), Some(field_name)) = (vec_from(field).await, content_disposition) {
+            if field_name.get_name() == Some("access_token") {
+                access_token = String::from_utf8(vec).ok();
+                continue;
+            }
+    
+            if field_name.get_name() == Some("repo") {
+                repo = String::from_utf8(vec).ok();
+                continue;
+            }
+
+            if field_name.get_name() == Some("postfolder") {
+                postfolder = String::from_utf8(vec).ok();
+                continue;
+            }
+    
+            if field_name.get_name() == Some("file") {
+                let filename = field_name.get_filename().ok_or(ChasmError::FilenameMissing)?;
+                relative_filename = Some(filename.to_string());
+                image_vec = Some(vec);
+    
+                continue;
+            }   
+        }
+    }
+
+    let filename = relative_filename.ok_or(ChasmError::FilenameMissing)?.to_string();
+    let postfolder = postfolder.ok_or(ChasmError::PostfolderMissing)?;
+    let filepath = format!("content/{}/{}", postfolder, sanitize_filename::sanitize(&filename));
+    let image_vec = image_vec.ok_or(ChasmError::ImageDataMissing)?;
+
+    let content = CommitContent::new_from_image(
+        "Add image".to_string(),
+        image_vec,
+        filepath.to_string(),
+    );
+
+    let repo = repo.ok_or(ChasmError::RepoMissing)?;
+    let access_token = access_token.ok_or(ChasmError::AccessTokenMissing)?;
+
+    let response = commit(repo, access_token, content).await?;
+
+    let image_upload_response = ImageUploadResponse {
+        commit_response: response,
+        filename: filename,
+    };
+
+    Ok(image_upload_response)
+}
+
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     let now: DateTime<Utc> = Utc::now();
     let date = now.format("%Y-%m-%dT%H:%M:%SZ");
@@ -178,66 +251,17 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     }
 }
 
-async fn upload_image(mut payload: Multipart) -> Result<web::Json<ImageUploadResponse>> {
-    let mut repo: Option<String> = Option::None;
-    let mut access_token: Option<String> = Option::None;
-    let mut relative_filename: Option<String> = Option::None;
-    let mut postfolder: Option<String> = Option::None;
-    let mut image_vec: Option<Vec<u8>> = Option::None;
+async fn upload_image(payload: Multipart) -> Result<web::Json<ImageUploadResponse>> {
+    let response = commit_image(payload).await;
 
-    while let Ok(Some(field)) = payload.try_next().await {
-        let content_disposition = field.content_disposition();
-
-        if let (Some(vec), Some(field_name)) = (vec_from(field).await, content_disposition) {
-            if field_name.get_name() == Some("access_token") {
-                access_token = Some(str::from_utf8(&vec).unwrap().to_string());
-                continue;
-            }
-    
-            if field_name.get_name() == Some("repo") {
-                repo = Some(str::from_utf8(&vec).unwrap().to_string());
-                continue;
-            }
-
-            if field_name.get_name() == Some("postfolder") {
-                postfolder = Some(str::from_utf8(&vec).unwrap().to_string());
-                continue;
-            }
-    
-            if field_name.get_name() == Some("file") {
-                let filename = field_name.get_filename().unwrap();
-                relative_filename = Some(filename.to_string());
-                image_vec = Some(vec);
-    
-                continue;
-            }   
+    match response {
+        Ok(response) => {
+            Ok(web::Json(response))
+        }
+        Err(error) => {
+            Err(actix_web::error::ErrorBadRequest(error))
         }
     }
-
-    // TODO: Fix unwrapping
-
-    let filename = relative_filename.unwrap();
-    let n1 = filename.to_string();
-    let filepath = format!("content/{}/{}", postfolder.unwrap(), sanitize_filename::sanitize(&n1));
-
-    let content = CommitContent::new_from_image(
-        "Add image".to_string(),
-        image_vec.unwrap(),
-        filepath.to_string(),
-    );
-
-    let unwrapped_repo = repo.unwrap();
-    let unwrapped_access_token = access_token.unwrap();
-    let unwrapped_content = content;
-
-    let response = commit(unwrapped_repo, unwrapped_access_token, unwrapped_content).await;
-
-    let image_upload_response = ImageUploadResponse {
-        commit_response: response.unwrap(),
-        filename: filename,
-    };
-
-    Ok(web::Json(image_upload_response))
 }
 
 async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
