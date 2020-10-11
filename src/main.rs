@@ -8,7 +8,6 @@ use std::fmt;
 use std::str;
 
 use futures::{StreamExt, TryStreamExt};
-
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
@@ -69,6 +68,7 @@ impl CommitContent {
 struct PostContent {
     repo: String,
     access_token: String,
+    date: DateTime<Utc>,
     postfolder: String,
     title: Option<String>,
     content: Vec<ContentPart>,
@@ -199,9 +199,6 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
 }
 
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
-    let now: DateTime<Utc> = Utc::now();
-    let date = now.format("%Y-%m-%dT%H:%M:%SZ");
-
     let mut body_string = "".to_string();
 
     let mut title_string = "".to_string();
@@ -229,7 +226,7 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
 
     let content_string = format!(
         "+++\ntitle = \"{}\"\ndate = {}\n+++\n{}\n\n<!-- more -->",
-        title_string, date, body_string
+        title_string, &content.date.format("%Y-%m-%dT%H:%M:%SZ"), body_string
     );
 
     let commit_content = CommitContent::new(
