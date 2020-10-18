@@ -75,11 +75,12 @@ struct PostContent {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type")]
 enum ContentPart {
-    Header(String),
-    Paragraph(String),
-    Image(String),
+    Header {text: String},
+    Paragraph {text: String},
+    Image {filename: String},
+    Link {title: String, url: String},
 }
 
 #[derive(Deserialize, Serialize)]
@@ -125,9 +126,11 @@ async fn commit(
 
     match response {
         Ok(response) => {
+            println!("GitHub Commit Response: {}", response.status());
             successful_response = response;
         }
-        Err(_) => {
+        Err(error) => {
+            println!("{}", error);
             return Err(ChasmError::InvalidCommitRequest);
         }
     }
@@ -209,17 +212,20 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
 
     for content_part in &content.content {
         match content_part {
-            ContentPart::Header(text) => {
+            ContentPart::Header { text }  => {
                 let header_string = format!("## {}\n", text);
                 body_string.push_str(&header_string);
             }
-            ContentPart::Paragraph(text) => {
+            ContentPart::Paragraph { text } => {
                 let paragraph_string = format!("{}\n", text);
                 body_string.push_str(&paragraph_string);
             }
-            ContentPart::Image(filename) => {
+            ContentPart::Image { filename } => {
                 let image_string = format!("![]({})\n", filename);
                 body_string.push_str(&image_string);
+            }
+            ContentPart::Link{ title, url } => {
+                break
             }
         }
     }
