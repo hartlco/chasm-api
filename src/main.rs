@@ -224,8 +224,9 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
                 let image_string = format!("![]({})\n", filename);
                 body_string.push_str(&image_string);
             }
-            ContentPart::Link{ title, url } => {
-                break
+            ContentPart::Link { title, url } => {
+                let image_string = format!("[{}]({})\n", title, url);
+                body_string.push_str(&image_string);
             }
         }
     }
