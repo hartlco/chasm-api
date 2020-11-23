@@ -14,6 +14,12 @@ use serde::{Deserialize, Serialize};
 
 use base64::encode;
 
+use std::fs;
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+use std::path::Path;
+
 #[derive(Debug, Clone)]
 enum ChasmError {
     InvalidCommitRequest,
@@ -66,12 +72,11 @@ impl CommitContent {
 
 #[derive(Deserialize, Serialize)]
 struct PostContent {
-    repo: String,
-    access_token: String,
     date: DateTime<Utc>,
     postfolder: String,
     title: Option<String>,
     content: Vec<ContentPart>,
+    location: ContentLocation,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -95,8 +100,15 @@ struct CommitResponseContent {
 
 #[derive(Deserialize, Serialize)]
 struct ImageUploadResponse {
-    commit_response: CommitResponse,
+    commit_response: Option<CommitResponse>,
     filename: String
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type")]
+enum ContentLocation {
+    Github { repo: String, access_token: String },
+    Local { path: String }
 }
 
 async fn commit(
@@ -147,6 +159,7 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
     let mut relative_filename: Option<String> = Option::None;
     let mut postfolder: Option<String> = Option::None;
     let mut image_vec: Option<Vec<u8>> = Option::None;
+    let mut local_path: Option<String> = Option::None;
 
     while let Ok(Some(field)) = payload.try_next().await {
         let content_disposition = field.content_disposition();
@@ -159,6 +172,11 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
     
             if field_name.get_name() == Some("repo") {
                 repo = String::from_utf8(vec).ok();
+                continue;
+            }
+
+            if field_name.get_name() == Some("local_path") {
+                local_path = String::from_utf8(vec).ok();
                 continue;
             }
 
@@ -182,23 +200,36 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
     let filepath = format!("content/{}/{}", postfolder, sanitize_filename::sanitize(&filename));
     let image_vec = image_vec.ok_or(ChasmError::ImageDataMissing)?;
 
-    let content = CommitContent::new_from_image(
-        "Add image".to_string(),
-        image_vec,
-        filepath.to_string(),
-    );
+    if let Some(local_path) = local_path {
+        let full_path = format!("{}/{}", local_path, filepath);
+        println!("Local save: {}", full_path.to_string());
+        let _ = write_file(&full_path, image_vec);
 
-    let repo = repo.ok_or(ChasmError::RepoMissing)?;
-    let access_token = access_token.ok_or(ChasmError::AccessTokenMissing)?;
+        let response = ImageUploadResponse {
+            commit_response: None,
+            filename: filename,
+        };
 
-    let response = commit(repo, access_token, content).await?;
-
-    let image_upload_response = ImageUploadResponse {
-        commit_response: response,
-        filename: filename,
-    };
-
-    Ok(image_upload_response)
+        Ok(response)
+    } else {
+        let content = CommitContent::new_from_image(
+            "Add image".to_string(),
+            image_vec,
+            filepath.to_string(),
+        );
+    
+        let repo = repo.ok_or(ChasmError::RepoMissing)?;
+        let access_token = access_token.ok_or(ChasmError::AccessTokenMissing)?;
+    
+        let response = commit(repo, access_token, content).await?;
+    
+        let image_upload_response = ImageUploadResponse {
+            commit_response: Some(response),
+            filename: filename,
+        };
+    
+        Ok(image_upload_response)
+    }
 }
 
 async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
@@ -236,22 +267,34 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
         title_string, &content.date.format("%Y-%m-%dT%H:%M:%SZ"), body_string
     );
 
-    let commit_content = CommitContent::new(
-        "Add post".to_string(),
-        content_string,
-        format!("content/{}/index.md", &content.postfolder),
-    );
+    let file_path = format!("content/{}/index.md", &content.postfolder);
 
-    let commit_response = commit(
-        content.repo.to_string(),
-        content.access_token.to_string(),
-        commit_content,
-    )
-    .await;
-
-    match commit_response {
-        Ok(_) => HttpResponse::Ok().json(content.0),
-        Err(error) => HttpResponse::from_error(actix_web::error::ErrorBadRequest(error)),
+    match &content.location {
+        ContentLocation::Github { repo, access_token } => {
+            let commit_content = CommitContent::new(
+                "Add post".to_string(),
+                content_string,
+                file_path,
+            );
+        
+            let commit_response = commit(
+                repo.to_string(),
+                access_token.to_string(),
+                commit_content,
+            )
+            .await;
+        
+            match commit_response {
+                Ok(_) => HttpResponse::Ok().json(content.0),
+                Err(error) => HttpResponse::from_error(actix_web::error::ErrorBadRequest(error)),
+            }
+        }
+        ContentLocation::Local { path } => {
+            let full_path = format!("{}/{}", path, file_path);
+            println!("Local save: {}", full_path.to_string());
+            let _ = write_file(&full_path, content_string.as_bytes().to_vec());
+            HttpResponse::Ok().json(content.0)
+        }
     }
 }
 
@@ -282,6 +325,16 @@ async fn vec_from(field: actix_multipart::Field) -> Option<Vec<u8>> {
     }
 
     return Some(vec)
+}
+
+fn write_file(path_string: &str, content: Vec<u8>) -> Result<(), io::Error> {
+    let path = Path::new(path_string);
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    let mut file = File::create(&path).unwrap();
+    file.write_all(&content)?;
+
+    Ok(())
 }
 
 #[actix_web::main]
