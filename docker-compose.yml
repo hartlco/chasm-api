@@ -3,6 +3,6 @@ services:
   web:
     build: .
     ports:
-      - "7070:3030"
+      - "3000:3000"
     volumes:
       - ./data:/data
