@@ -4,15 +4,9 @@ use actix_multipart::Multipart;
 use actix_web::client::Client;
 use actix_web::{web, App, HttpResponse, HttpServer, Result};
 
-use std::fmt;
 use std::str;
 
 use futures::{StreamExt, TryStreamExt};
-use chrono::{DateTime, Utc};
-
-use serde::{Deserialize, Serialize};
-
-use base64::encode;
 
 use std::fs;
 use std::fs::File;
@@ -20,102 +14,13 @@ use std::io;
 use std::io::prelude::*;
 use std::path::Path;
 
-#[derive(Debug, Clone)]
-enum ChasmError {
-    InvalidCommitRequest,
-    InvalidCommitJSON,
-    FilenameMissing,
-    PostfolderMissing,
-    ImageDataMissing,
-    RepoMissing,
-    AccessTokenMissing,
-}
-
-impl fmt::Display for ChasmError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ChasmError::InvalidCommitRequest => write!(f, "Invalid Commit Request"),
-            ChasmError::InvalidCommitJSON => write!(f, "Invalid Commit JSON"),
-            ChasmError::FilenameMissing => write!(f, "Filename missing"),
-            ChasmError::PostfolderMissing => write!(f, "Postfolder missing"),
-            ChasmError::ImageDataMissing => write!(f, "Image Data Missing"),
-            ChasmError::RepoMissing => write!(f, "Repo Missng"),
-            ChasmError::AccessTokenMissing => write!(f, "Access Token Missing"),
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-struct CommitContent {
-    message: String,
-    content: String,
-    path: String,
-}
-
-impl CommitContent {
-    fn new(message: String, content: String, path: String) -> CommitContent {
-        CommitContent {
-            message: message,
-            content: encode(content),
-            path: path,
-        }
-    }
-
-    fn new_from_image(message: String, content: Vec<u8>, path: String) -> CommitContent {
-        CommitContent {
-            message: message,
-            content: encode(content),
-            path: path,
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-struct PostContent {
-    date: DateTime<Utc>,
-    postfolder: String,
-    title: Option<String>,
-    content: Vec<ContentPart>,
-    location: ContentLocation,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type")]
-enum ContentPart {
-    Header {text: String},
-    Paragraph {text: String},
-    Image {filename: String},
-    Link {title: String, url: String},
-}
-
-#[derive(Deserialize, Serialize)]
-struct CommitResponse {
-    content: CommitResponseContent,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CommitResponseContent {
-    download_url: String,
-}
-
-#[derive(Deserialize, Serialize)]
-struct ImageUploadResponse {
-    commit_response: Option<CommitResponse>,
-    filename: String
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type")]
-enum ContentLocation {
-    Github { repo: String, access_token: String },
-    Local { path: String }
-}
+mod models;
 
 async fn commit(
     repo: String,
     access_token: String,
-    content: CommitContent,
-) -> std::result::Result<CommitResponse, ChasmError> {
+    content: models::CommitContent,
+) -> std::result::Result<models::CommitResponse, models::ChasmError> {
     let repository = repo;
 
     let post_url = format!(
@@ -143,17 +48,17 @@ async fn commit(
         }
         Err(error) => {
             println!("{}", error);
-            return Err(ChasmError::InvalidCommitRequest);
+            return Err(models::ChasmError::InvalidCommitRequest);
         }
     }
 
     successful_response
         .json()
         .await
-        .map_err(|_| ChasmError::InvalidCommitJSON)
+        .map_err(|_| models::ChasmError::InvalidCommitJSON)
 }
 
-async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUploadResponse, ChasmError> {
+async fn commit_image(mut payload: Multipart) -> std::result::Result<models::ImageUploadResponse, models::ChasmError> {
     let mut repo: Option<String> = Option::None;
     let mut access_token: Option<String> = Option::None;
     let mut relative_filename: Option<String> = Option::None;
@@ -186,7 +91,7 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
             }
     
             if field_name.get_name() == Some("file") {
-                let filename = field_name.get_filename().ok_or(ChasmError::FilenameMissing)?;
+                let filename = field_name.get_filename().ok_or(models::ChasmError::FilenameMissing)?;
                 relative_filename = Some(filename.to_string());
                 image_vec = Some(vec);
     
@@ -195,35 +100,35 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
         }
     }
 
-    let filename = relative_filename.ok_or(ChasmError::FilenameMissing)?.to_string();
-    let postfolder = postfolder.ok_or(ChasmError::PostfolderMissing)?;
+    let filename = relative_filename.ok_or(models::ChasmError::FilenameMissing)?.to_string();
+    let postfolder = postfolder.ok_or(models::ChasmError::PostfolderMissing)?;
     let filepath = format!("content/{}/{}", postfolder, sanitize_filename::sanitize(&filename));
-    let image_vec = image_vec.ok_or(ChasmError::ImageDataMissing)?;
+    let image_vec = image_vec.ok_or(models::ChasmError::ImageDataMissing)?;
 
     if let Some(local_path) = local_path {
         let full_path = format!("{}/{}", local_path, filepath);
         println!("Local save: {}", full_path.to_string());
         let _ = write_file(&full_path, image_vec);
 
-        let response = ImageUploadResponse {
+        let response = models::ImageUploadResponse {
             commit_response: None,
             filename: filename,
         };
 
         Ok(response)
     } else {
-        let content = CommitContent::new_from_image(
+        let content = models::CommitContent::new_from_image(
             "Add image".to_string(),
             image_vec,
             filepath.to_string(),
         );
     
-        let repo = repo.ok_or(ChasmError::RepoMissing)?;
-        let access_token = access_token.ok_or(ChasmError::AccessTokenMissing)?;
+        let repo = repo.ok_or(models::ChasmError::RepoMissing)?;
+        let access_token = access_token.ok_or(models::ChasmError::AccessTokenMissing)?;
     
         let response = commit(repo, access_token, content).await?;
     
-        let image_upload_response = ImageUploadResponse {
+        let image_upload_response = models::ImageUploadResponse {
             commit_response: Some(response),
             filename: filename,
         };
@@ -232,7 +137,7 @@ async fn commit_image(mut payload: Multipart) -> std::result::Result<ImageUpload
     }
 }
 
-async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
+async fn post_content(content: web::Json<models::PostContent>) -> HttpResponse {
     let mut body_string = "".to_string();
 
     let mut title_string = "".to_string();
@@ -243,19 +148,19 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
 
     for content_part in &content.content {
         match content_part {
-            ContentPart::Header { text }  => {
+            models::ContentPart::Header { text }  => {
                 let header_string = format!("## {}\n", text);
                 body_string.push_str(&header_string);
             }
-            ContentPart::Paragraph { text } => {
+            models::ContentPart::Paragraph { text } => {
                 let paragraph_string = format!("{}\n", text);
                 body_string.push_str(&paragraph_string);
             }
-            ContentPart::Image { filename } => {
+            models::ContentPart::Image { filename } => {
                 let image_string = format!("![]({})\n", filename);
                 body_string.push_str(&image_string);
             }
-            ContentPart::Link { title, url } => {
+            models::ContentPart::Link { title, url } => {
                 let image_string = format!("[{}]({})\n", title, url);
                 body_string.push_str(&image_string);
             }
@@ -270,8 +175,8 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     let file_path = format!("content/{}/index.md", &content.postfolder);
 
     match &content.location {
-        ContentLocation::Github { repo, access_token } => {
-            let commit_content = CommitContent::new(
+        models::ContentLocation::Github { repo, access_token } => {
+            let commit_content = models::CommitContent::new(
                 "Add post".to_string(),
                 content_string,
                 file_path,
@@ -289,7 +194,7 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
                 Err(error) => HttpResponse::from_error(actix_web::error::ErrorBadRequest(error)),
             }
         }
-        ContentLocation::Local { path } => {
+        models::ContentLocation::Local { path } => {
             let full_path = format!("{}/{}", path, file_path);
             println!("Local save: {}", full_path.to_string());
             let _ = write_file(&full_path, content_string.as_bytes().to_vec());
@@ -298,7 +203,7 @@ async fn post_content(content: web::Json<PostContent>) -> HttpResponse {
     }
 }
 
-async fn upload_image(payload: Multipart) -> Result<web::Json<ImageUploadResponse>> {
+async fn upload_image(payload: Multipart) -> Result<web::Json<models::ImageUploadResponse>> {
     let response = commit_image(payload).await;
 
     match response {
