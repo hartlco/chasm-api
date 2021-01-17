@@ -168,7 +168,7 @@ async fn post_content(content: web::Json<models::PostContent>) -> HttpResponse {
     }
 
     let content_string = format!(
-        "+++\ntitle = \"{}\"\ndate = {}\n+++\n{}\n\n<!-- more -->",
+        "---\ntitle: \"{}\"\ndate: {}\n---\n{}\n",
         title_string, &content.date.format("%Y-%m-%dT%H:%M:%SZ"), body_string
     );
 
